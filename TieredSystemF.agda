@@ -77,6 +77,10 @@ checkEqTypeVar (there a) (there a') with checkEqTypeVar a a'
 checkEqTypeVar (there a) (there a') | eqTypeVar p = eqTypeVar (there p)
 checkEqTypeVar (there a) (there a') | notEqTypeVar np = notEqTypeVar (there-there np)
 
+checkEqTypeVarCorrect : forall {H a a'} -> (P : EqTypeVar H a a') -> checkEqTypeVar a a' ≡ eqTypeVar P
+checkEqTypeVarCorrect here = refl
+checkEqTypeVarCorrect (there a) rewrite checkEqTypeVarCorrect a = refl
+
 reflEqTypeVar : forall {H} {a : TypeVar H} -> EqTypeVar H a a
 reflEqTypeVar {a = here} = here
 reflEqTypeVar {a = there a} = there reflEqTypeVar
@@ -211,26 +215,25 @@ checkEqType (all A) (all A') with checkEqType A A'
 checkEqType (all A) (all A') | eqType p = eqType (all p)
 checkEqType (all A) (all A') | notEqType np = notEqType (all-all np)
 
+checkEqTypeCorrect : forall {H} {A B : Type H} -> (P : EqType A B) -> checkEqType A B ≡ eqType P
+checkEqTypeCorrect (var a) rewrite checkEqTypeVarCorrect a = refl
+checkEqTypeCorrect (A => B) rewrite checkEqTypeCorrect A | checkEqTypeCorrect B = refl
+checkEqTypeCorrect (all A) rewrite checkEqTypeCorrect A = refl
+
 reflEqType : forall {H} {A : Type H} -> EqType A A
 reflEqType {A = var x} = var reflEqTypeVar
 reflEqType {A = A => B} = reflEqType => reflEqType
 reflEqType {A = all A} = all reflEqType
 
-data IsFunType {H} : Type H -> Set where
-  _=>_ : (A B : Type H) -> IsFunType (A => B)
-
-argType : forall {H A} -> IsFunType A -> Type H
-argType (A => _) = A
-
-retType : forall {H A} -> IsFunType A -> Type H
-retType (_ => B) = B
+data IsFunType {H} : Type H -> Type H -> Type H -> Set where
+  _=>_ : (A B : Type H) -> IsFunType (A => B) A B
 
 data IsNotFunType {H} : Type H -> Set where
   var : (a : TypeVar H) -> IsNotFunType (var a)
   all : (A : Type (H ,type)) -> IsNotFunType (all A)
 
 data CheckFunType {H} (A : Type H) : Set where
-  isFunType : IsFunType A -> CheckFunType A
+  isFunType : forall {B C} -> IsFunType A B C -> CheckFunType A
   isNotFunType : IsNotFunType A -> CheckFunType A
 
 checkFunType : forall {H} -> (A : Type H) -> CheckFunType A
@@ -238,24 +241,27 @@ checkFunType (var a) = isNotFunType (var a)
 checkFunType (A => B) = isFunType (A => B)
 checkFunType (all A) = isNotFunType (all A)
 
-data IsAllType {H} : Type H -> Set where
-  all : (A : Type (H ,type)) -> IsAllType (all A)
+checkFunTypeCorrect : forall {H} {A B C : Type H} -> (P : IsFunType A B C) -> checkFunType A ≡ isFunType P
+checkFunTypeCorrect (A => B) = refl
 
-bodyType : forall {H A} -> IsAllType A -> Type (H ,type)
-bodyType (all A) = A
+data IsAllType {H} : Type H -> Type (H ,type) -> Set where
+  all : (A : Type (H ,type)) -> IsAllType (all A) A
 
 data IsNotAllType {H} : Type H -> Set where
   var : (a : TypeVar H) -> IsNotAllType (var a)
   _=>_ : (A B : Type H) -> IsNotAllType (A => B)
 
 data CheckAllType {H} (A : Type H) : Set where
-  isAllType : IsAllType A -> CheckAllType A
+  isAllType : forall {B} -> IsAllType A B -> CheckAllType A
   isNotAllType : IsNotAllType A -> CheckAllType A
 
 checkAllType : forall {H} -> (A : Type H) -> CheckAllType A
 checkAllType (var a) = isNotAllType (var a)
 checkAllType (A => B) = isNotAllType (A => B)
 checkAllType (all A) = isAllType (all A)
+
+checkAllTypeCorrect : forall {H} {A : Type H} {B} -> (P : IsAllType A B) -> checkAllType A ≡ isAllType P
+checkAllTypeCorrect (all A) = refl
   
 
 
@@ -357,32 +363,31 @@ mutual
   data Term (G : TermContext) : Set where
     var : TermVar G -> Term G
     lam : (A : Type (stripTermContext G)) -> (M : Term (G ,term A)) -> Term G
-    app : {A B : Type (stripTermContext G)} -> (M : Term G) -> (N : Term G) -> (PFun : IsFunType (extractTypeFromTerm M)) -> EqType (extractTypeFromTerm N) (argType PFun) -> Term G
+    app : {A B : Type (stripTermContext G)} -> (M : Term G) -> (N : Term G) -> (PFun : IsFunType (extractTypeFromTerm M) A B) -> EqType (extractTypeFromTerm N) A -> Term G
     abs : (P : Term (G ,type)) -> Term G
-    inst : forall {A} -> (P : Term G) -> (B : Type (stripTermContext G)) -> EqType (extractTypeFromTerm P) (all A) -> Term G
+    inst : forall {A} -> (P : Term G) -> (B : Type (stripTermContext G)) -> IsAllType (extractTypeFromTerm P) A -> Term G
 
   extractTypeFromTerm : forall {G} -> Term G -> Type (stripTermContext G)
   extractTypeFromTerm (var x) = extractTypeFromTermVar x
   extractTypeFromTerm (lam A M) = A => extractTypeFromTerm M
-  extractTypeFromTerm (app M N pFun pN) = retType pFun
+  extractTypeFromTerm (app {B = B} M N pFun pN) = B
   extractTypeFromTerm (abs M) = all (extractTypeFromTerm M)
-  extractTypeFromTerm (inst M B pM) with extractTypeFromTerm M
-  extractTypeFromTerm (inst M B (all pA)) | all A = substType B A
+  extractTypeFromTerm (inst {A = A} M B pAll) = substType B A
 
 mutual
   data IsTerm (G : TermContext) : RawTerm -> Set where
     var : forall {x} -> IsTermVar G x -> IsTerm G (var x)
     lam : forall {A M} -> (P : IsType (stripTermContext G) A) -> IsTerm (G ,term (extractType P)) M -> IsTerm G (lam A M)
-    app : forall {M N} -> (PM : IsTerm G M) -> (PN : IsTerm G N) -> (PFun : IsFunType (extractTypeFromIsTerm PM)) -> EqType (extractTypeFromIsTerm PN) (argType PFun) -> IsTerm G (app M N)
+    app : forall {A B M N} -> (PM : IsTerm G M) -> (PN : IsTerm G N) -> (PFun : IsFunType (extractTypeFromIsTerm PM) A B) -> EqType (extractTypeFromIsTerm PN) A -> IsTerm G (app M N)
     abs : forall {M} -> IsTerm (G ,type) M -> IsTerm G (abs M)
-    inst : forall {M B} -> (PM : IsTerm G M) -> (PB : IsType (stripTermContext G) B) -> IsAllType (extractTypeFromIsTerm PM) -> IsTerm G (inst M B)
+    inst : forall {A M B} -> (PM : IsTerm G M) -> (PB : IsType (stripTermContext G) B) -> IsAllType (extractTypeFromIsTerm PM) A -> IsTerm G (inst M B)
 
   extractTypeFromIsTerm : forall {G M} -> IsTerm G M -> Type (stripTermContext G)
   extractTypeFromIsTerm (var x) = extractTypeFromIsTermVar x
   extractTypeFromIsTerm (lam A M) = extractType A => extractTypeFromIsTerm M
-  extractTypeFromIsTerm (app M N pFun pn) = retType pFun
+  extractTypeFromIsTerm (app {B = B} M N pFun pn) = B
   extractTypeFromIsTerm (abs M) = all (extractTypeFromIsTerm M)
-  extractTypeFromIsTerm (inst M B pAll) = substType (extractType B) (bodyType pAll)
+  extractTypeFromIsTerm (inst {A = A} M B pAll) = substType (extractType B) A
 
 data IsNotTerm (G : TermContext) : RawTerm -> Set where
   not-var : forall {x} -> IsNotTermVar G x -> IsNotTerm G (var x)
@@ -391,7 +396,7 @@ data IsNotTerm (G : TermContext) : RawTerm -> Set where
   not-app-L : forall {M N} -> IsNotTerm G M -> IsNotTerm G (app M N)
   not-app-R : forall {M N} -> IsTerm G M -> IsNotTerm G N -> IsNotTerm G (app M N)
   not-app-funtype : forall {M N} -> (P : IsTerm G M) -> IsTerm G N -> IsNotFunType (extractTypeFromIsTerm P) -> IsNotTerm G (app M N)
-  not-app-argtype : forall {M N} -> (P : IsTerm G M) -> (P' : IsTerm G N) -> (PFun : IsFunType (extractTypeFromIsTerm P)) -> NotEqType (extractTypeFromIsTerm P') (argType PFun) -> IsNotTerm G (app M N)
+  not-app-argtype : forall {A B M N} -> (P : IsTerm G M) -> (P' : IsTerm G N) -> (PFun : IsFunType (extractTypeFromIsTerm P) A B) -> NotEqType (extractTypeFromIsTerm P') A -> IsNotTerm G (app M N)
   not-abs : forall {M} -> IsNotTerm (G ,type) M -> IsNotTerm G (abs M)
   not-inst-L : forall {M B} -> IsNotTerm G M -> IsNotTerm G (inst M B)
   not-inst-R : forall {M B} -> IsTerm G M -> IsNotType (stripTermContext G) B -> IsNotTerm G (inst M B)
@@ -413,7 +418,7 @@ synthTerm G (lam A M) | isNotType npA = isNotTerm (not-lam-L npA)
 synthTerm G (app M N) with synthTerm G M
 synthTerm G (app M N) | isTerm pM with synthTerm G N
 synthTerm G (app M N) | isTerm pM | isTerm pN with checkFunType (extractTypeFromIsTerm pM)
-synthTerm G (app M N) | isTerm pM | isTerm pN | isFunType pFun with checkEqType (extractTypeFromIsTerm pN) (argType pFun)
+synthTerm G (app M N) | isTerm pM | isTerm pN | isFunType pFun with checkEqType (extractTypeFromIsTerm pN) _
 synthTerm G (app M N) | isTerm pM | isTerm pN | isFunType pFun | eqType eq = isTerm (app pM pN pFun eq)
 synthTerm G (app M N) | isTerm pM | isTerm pN | isFunType pFun | notEqType neq = isNotTerm (not-app-argtype pM pN pFun neq)
 synthTerm G (app M N) | isTerm pM | isTerm pN | isNotFunType npFun = isNotTerm (not-app-funtype pM pN npFun)
@@ -437,25 +442,55 @@ extractRawTerm (app M N _ _) = app (extractRawTerm M) (extractRawTerm N)
 extractRawTerm (abs M) = abs (extractRawTerm M)
 extractRawTerm (inst M B _) = inst (extractRawTerm M) (extractRawType B)
 
-extractTerm : forall {G M} -> IsTerm G M -> Term G
-extractTerm (var x) = var (extractTermVar x)
-extractTerm (lam A M) = lam (extractType A) (extractTerm M)
-extractTerm (app M N pFun pN) = app (extractTerm M) (extractTerm N) {!!} {!!}
-extractTerm (abs M) = abs (extractTerm M)
-extractTerm (inst M B pM) = inst (extractTerm M) (extractType B) {!!}
+mutual
+  
+  extractTerm : forall {G M} -> IsTerm G M -> Term G
+  extractTerm (var x) = var (extractTermVar x)
+  extractTerm (lam A M) = lam (extractType A) (extractTerm M)
+  extractTerm (app {A = A} {B = B} M N pFun pN) = app {A = A} {B = B}
+                                                      (extractTerm M)
+                                                      (extractTerm N)
+                                                      (subst (\ T -> IsFunType T A B) (extractTermLemma M) pFun)
+                                                      (subst (\ T -> EqType T A) (extractTermLemma N) pN)
+  extractTerm (abs M) = abs (extractTerm M)
+  extractTerm (inst {A = A} M B pM) = inst {A = A} (extractTerm M) (extractType B) (subst (\ T -> IsAllType T A) (extractTermLemma M) pM )
 
-{-
-coherenceTerm : forall {G M A} -> (P : IsTerm G M A) -> extractRawTerm (extractTerm P) ≡ M
+  extractVarLemma : forall {G x} -> (P : IsTermVar G x) -> extractTypeFromIsTermVar P ≡ extractTypeFromTermVar (extractTermVar P)
+  extractVarLemma here = refl
+  extractVarLemma (there x) rewrite extractVarLemma x = refl
+  extractVarLemma (skip-type x) rewrite extractVarLemma x = refl
+  
+  extractTermLemma : forall {G M} -> (P : IsTerm G M) -> extractTypeFromIsTerm P ≡ extractTypeFromTerm (extractTerm P)
+  extractTermLemma (var x) = extractVarLemma x
+  extractTermLemma (lam A M) rewrite extractTermLemma M = refl
+  extractTermLemma (app M N pFun pN) = refl
+  extractTermLemma (abs M) rewrite extractTermLemma M = refl
+  extractTermLemma (inst M B pAll) = refl
+
+coherenceTerm : forall {G M} -> (P : IsTerm G M) -> extractRawTerm (extractTerm P) ≡ M
 coherenceTerm (var x) rewrite coherenceTermVar x = refl
 coherenceTerm (lam A M) rewrite coherenceType A | coherenceTerm M = refl
-coherenceTerm (app M N) rewrite coherenceTerm M | coherenceTerm N = refl
+coherenceTerm (app M N _ _) rewrite coherenceTerm M | coherenceTerm N = refl
 coherenceTerm (abs M) rewrite coherenceTerm M = refl
-coherenceTerm (inst M B) rewrite coherenceTerm M | coherenceType B = refl
--}
+coherenceTerm (inst M B _) rewrite coherenceTerm M | coherenceType B = refl
 
 synthTermCorrect : forall {G M} -> (P : IsTerm G M) -> synthTerm G M ≡ isTerm P
 synthTermCorrect (var x) rewrite synthTermVarCorrect x = refl
 synthTermCorrect (lam A M) rewrite checkTypeCorrect A | synthTermCorrect M = refl
-synthTermCorrect (app M N pM pN) rewrite synthTermCorrect M | synthTermCorrect N = {!!}
+synthTermCorrect {G} {app M N} (app P P' pM pN) with synthTerm G M | synthTermCorrect P
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl with synthTerm G N | synthTermCorrect P'
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl | isTerm .P' | refl with checkFunType (extractTypeFromIsTerm P) | checkFunTypeCorrect pM
+synthTermCorrect {G} {app M N} (app {A = A} P P' pM pN) | isTerm .P | refl | isTerm .P' | refl | isFunType .pM | refl with checkEqType (extractTypeFromIsTerm P') A | checkEqTypeCorrect pN
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl | isTerm .P' | refl | isFunType .pM | refl | eqType .pN | refl = refl
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl | isTerm .P' | refl | isFunType .pM | refl | notEqType _ | ()
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl | isTerm .P' | refl | isNotFunType _ | ()
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isTerm .P | refl | isNotTerm x | ()
+synthTermCorrect {G} {app M N} (app P P' pM pN) | isNotTerm _ | ()
 synthTermCorrect (abs M) rewrite synthTermCorrect M = refl
-synthTermCorrect (inst M B pM) rewrite synthTermCorrect M | checkTypeCorrect B = {!!}
+synthTermCorrect {G} {inst M B} (inst P P' pM) with synthTerm G M | synthTermCorrect P
+synthTermCorrect {G} {inst M B} (inst P P' pM) | isTerm .P | refl with checkType (stripTermContext G) B | checkTypeCorrect P'
+synthTermCorrect {G} {inst M B} (inst P P' pM) | isTerm .P | refl | isType .P' | refl with checkAllType (extractTypeFromIsTerm P) | checkAllTypeCorrect pM
+synthTermCorrect {G} {inst M B₁} (inst P P' pM) | isTerm .P | refl | isType .P' | refl | isAllType .pM | refl = refl
+synthTermCorrect {G} {inst M B} (inst P P' pM) | isTerm .P | refl | isType .P' | refl | isNotAllType _ | ()
+synthTermCorrect {G} {inst M B} (inst P P' pM) | isTerm .P | refl | isNotType _ | ()
+synthTermCorrect {G} {inst M B} (inst P P' pM) | isNotTerm _ | ()
