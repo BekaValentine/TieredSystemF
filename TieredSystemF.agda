@@ -1,4 +1,4 @@
-module Tieredsystemf where
+module TieredSystemF where
 
 open import Relation.Binary.PropositionalEquality
 
